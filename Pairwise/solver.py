@@ -58,19 +58,19 @@ class PairwiseSolver:
         self.neighbors = self.neighbors.tolist()
         for state in range(self.nrStates):
             for action in range(self.nrActions):
-                first_found = True
+                first_found = False
+
                 for end_state in range(self.nrStates):
-                    if self.transition[action][state][end_state] != 0:
-                        if first_found:
+                    if self.transition[action][state][end_state] > 0:
+                        if not first_found:
                             self.neighbors[action][state] = [end_state]
-                            first_found = False
+                            first_found = True
                         else:
                             self.neighbors[action][state].append(end_state)
 
         # generate 3d and 2d Reward
         self.R_2d = np.zeros([self.nrActions, self.nrStates])
         self.R_3d = np.zeros([self.nrActions, self.nrStates, self.nrStates])
-        self.reward = self.R_3d
         for action in range(self.nrActions):
             for start_state in range(self.nrStates):
                 for end_state in range(self.nrStates):
@@ -82,10 +82,8 @@ class PairwiseSolver:
                                                           self.pomdp.R[action, start_state, end_state, obs]
                         self.R_3d[action, start_state, end_state] += obs_prob * \
                                                                      self.pomdp.R[action, start_state, end_state, obs]
+        self.reward = self.R_3d
 
-        #print("transition", self.transition)
-        #print("observation", self.observation)
-        #print("reward", self.reward)
 
 
     def MDP(self):
@@ -117,13 +115,8 @@ class PairwiseSolver:
             self.V = new_V
             self.policy = new_policy
 
-        #print(self.policy)
+        print(self.policy)
 
-        ac = open("MDPAc.txt", "w")
-        val = open("MDPVal.txt", "w")
-        for state in range(self.nrStates):
-            print(ac, self.policy[state])
-            print(val, self.V[state])
 
 
     def SLAP_pairs(self, difference_threshold):
@@ -201,21 +194,14 @@ class PairwiseSolver:
                         self.pair_actions[s][s_prime] = self.pair_actions[s_prime][s] = ac
                         one_action_localization[s][s_prime] = one_action_localization[s_prime][s] = max_value
 
-
         #get runtime
         end_time = time.time()
         total_time = end_time - start_time
         print("Total time to run SLAP_pairs was", total_time)
 
-        #output and clear
-        out1 = open("pair_values.txt", "w")
-        out2 = open("pair_actions.txt", "w")
-        for i in range(self.nrStates):
-            for j in range(self.nrStates):
-                print(out1, self.pair_values[i][j])
-                print(out2, self.pair_actions[i][j])
-            print(out1)
-            print(out2)
+        #format for easy file comparison
+        np.savetxt("pair_values.txt", self.pair_values)
+        np.savetxt("pair_actions.txt", self.pair_actions)
 
 
     def online_planner(self, compare_ratio):
@@ -310,20 +296,9 @@ class PairwiseSolver:
         :param action:
         '''
         '''
-        #act with uncertainty - based on distribution
-        probability_distribution = self.transition[action][real_state]
-        end_state = np.random.choice(np.arange(0, self.nrStates), p=probability_distribution)
-
-        #observe with uncertainty - based on distribution
-        probability_distribution = self.observation[action][end_state]
-        observation = np.random.choice(np.arange(0, self.nrObservations), p=probability_distribution)
-
-        return observation, end_state
-        '''
-
         rand_max = 32762
         r = random.randrange(0, rand_max) % 32000
-        r = r / 32000;
+        r = r / 32000
         sum = 0
         for i in range(self.nrStates-1):
             sum = sum + self.transition[action][i][real_state]
@@ -338,11 +313,29 @@ class PairwiseSolver:
             if sum > r:
                 return i, real_state
         return i, real_state
+        '''
+
+        # from QMDP.environment
+        # NOTE: making this change removed /0 error but decreased reward
+
+        # determine start state
+        start_state = real_state
+
+        # determine end state and update current
+        transition_prob = self.pomdp.T[action, start_state]
+        end_state = np.random.choice(np.arange(0, len(transition_prob)), p=transition_prob)
+
+        # find observation distribution
+        observation_distribution = self.pomdp.O[action, end_state]
+        observation = np.random.choice(np.arange(0, len(observation_distribution)), p=observation_distribution)
+
+        return observation, end_state
+
 
 
     def update_bel(self, action, o):
         '''
-        from QMDP.py implementation
+        from QMDP.py implementation, confirmed works
         :return: new belief state
         '''
         #compute transitions
@@ -351,10 +344,11 @@ class PairwiseSolver:
         #multiply by observation probability
         current_belief = current_belief * self.pomdp.O[action, :, o]
 
-        return current_belief / np.sum(current_belief) #if self.pomdp.O[] was0, now we have nan, BAD
+        return current_belief / np.sum(current_belief) #if self.pomdp.O[] was 0, now we have nan, BAD
 
 
     def choose_start_state(self):
+        #confirmed OK from previous QMDP code
         probability_distribution = self.start
         start_state = np.random.choice(np.arange(0, self.nrStates), p=probability_distribution)
         return start_state
@@ -363,19 +357,17 @@ class PairwiseSolver:
 
 
 if __name__ == "__main__":
-    pomdp = POMDP("Hallway.POMDP")
+    pomdp = POMDP("Hallway2.POMDP")
     pairwiseSolver = PairwiseSolver(pomdp)
-    print("starting SLAP_pairs")
-    pairwiseSolver.SLAP_pairs(0.80)
-    print("finished SLAP pairs")
+    pairwiseSolver.SLAP_pairs(0.70) #initially 0.8
 
     num_sims = 100 #for testing
     #for j in range(10): #what is this 10
     #    sum_reward = 0
-    #below was nested
-    sum_reward = 0
+    #    #below was nested
     for i in range(num_sims):
-        temp_reward = pairwiseSolver.online_planner(19) #what is this 19
+        sum_reward = 0
+        temp_reward = pairwiseSolver.online_planner(8) #initally 19
         sum_reward += temp_reward
 
     print("Average total reward after", num_sims, "simulations", sum_reward/num_sims)
