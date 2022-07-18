@@ -12,7 +12,8 @@
 import numpy as np
 import time
 import random
-from pomdp import POMDP
+from Pairwise.pomdp import POMDP
+
 
 
 class PairwiseSolver:
