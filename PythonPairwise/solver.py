@@ -40,18 +40,10 @@ class PairwiseSolver:
         self.policy = len(self.pomdp.states) #used in MDP
 
         #make states_actions
-        self.states_actions = np.empty((self.nrActions, self.nrStates), int) #argmax of belief_state, s* from paper
-        for state in range(self.nrStates):
-            for action in range(self.nrActions):
-                state_distribution = self.transition[action][state]
-                self.states_actions[action][state] = np.argmax(state_distribution)
+        self.states_actions = np.argmax(self.transition, axis=2)
 
         #make states_observations
-        self.states_observations = np.zeros((self.nrActions, self.nrStates), int)
-        for state in range(self.nrStates):
-            for action in range(self.nrActions):
-                observation_distribution = self.observation[action][state]
-                self.states_observations[action][state] = np.argmax(observation_distribution)
+        self.states_observations = np.argmax(self.observation, axis=2)
 
         #make neighbors
         self.neighbors = np.empty((len(self.pomdp.actions), len(self.pomdp.states)), int) #vector in C++ file
@@ -209,22 +201,19 @@ class PairwiseSolver:
         implement Algorithm 2, solver, online planning method
         :param compare_ratio:
         '''
-        ## TODO: review, clean, fix (reward is still 0)
         ## TODO: format as matrices
         iterations = 151 #NUM_ITERATIONS in C++
-        max_utility = -10 #MIN in C++
-        valid_action = [False] * self.nrActions
         actions = [-1] * iterations
-
         self.belief = np.multiply(self.start, 1)
         real_state = self.choose_start_state()
-        visited_states = [real_state]
+        real_states = []
 
         start_time = time.time()
 
         for iteration in range(iterations):
-            list_states = []
-            real_states = []
+            list_states = [] # list_states = set S' from pseudocode
+            valid_action = [False] * self.nrActions
+            max_utility = -10  # MIN in C++
 
             # pseudocode line 1 - maxBel = max_s b_k(s)
             real_states.append(real_state)
@@ -236,7 +225,7 @@ class PairwiseSolver:
                     list_states.append(state)  # list_states = set S'
 
             # pseudocode line 4/5 - if |S'| == 1 then a is optimal action
-            if len(list_states) == 1:
+            if len(list_states) == 1: # len(list_states) = number_states in cpp
                 action = self.policy[list_states[0]]
 
             # if multiple likely states (loop beginning pseudocode line 6)
@@ -247,7 +236,7 @@ class PairwiseSolver:
                         s = list_states[i]
                         s_prime = list_states[j]
                         if self.pair_actions[s][s_prime] >= 0:
-                            valid_action[self.pair_actions[s][s_prime]] = True
+                            valid_action[self.pair_actions[s][s_prime]] = True # valid_action = A' in pseudocode
 
                 # pseudocode line 7 - for each a in A' do
                 for ac in range(self.nrActions):
@@ -273,17 +262,17 @@ class PairwiseSolver:
             #act, observe, and update belief
             obs, real_state = self.act_and_observe(real_state, action)
             actions[iteration] = action
-            visited_states.append(real_state)
             self.belief = self.update_bel(action, obs)
 
         #after iterations complete. get reward and time
         total_reward = 0
         discount = 1
-        for iteration in range(iterations - 1):
+        for i in range(iterations - 1):
             discount = discount * self.gamma
-            s = visited_states[iteration]
-            s_prime = visited_states[iteration+1]
-            total_reward += discount * self.reward[actions[iteration]][s][s_prime]
+            s = real_states[i]
+            s_prime = real_states[i+1]
+            a = actions[i]
+            total_reward += discount * self.reward[a][s][s_prime]
         end_time = time.time()
 
         return total_reward
@@ -295,29 +284,6 @@ class PairwiseSolver:
         :param real_state:
         :param action:
         '''
-        '''
-        rand_max = 32762
-        r = random.randrange(0, rand_max) % 32000
-        r = r / 32000
-        sum = 0
-        for i in range(self.nrStates-1):
-            sum = sum + self.transition[action][i][real_state]
-            if sum > r:
-                break
-        real_state = i
-        sum = 0
-        r = random.randrange(0, rand_max) % 32000
-        r = r / 32000
-        for i in range(self.nrObservations):
-            sum = sum + self.observation[action][real_state][i]
-            if sum > r:
-                return i, real_state
-        return i, real_state
-        '''
-
-        # from QMDP.environment
-        # NOTE: making this change removed /0 error but decreased reward
-
         # determine start state
         start_state = real_state
 
@@ -348,7 +314,6 @@ class PairwiseSolver:
 
 
     def choose_start_state(self):
-        #confirmed OK from previous QMDP code
         probability_distribution = self.start
         start_state = np.random.choice(np.arange(0, self.nrStates), p=probability_distribution)
         return start_state
@@ -365,8 +330,8 @@ if __name__ == "__main__":
     #for j in range(10): #what is this 10
     #    sum_reward = 0
     #    #below was nested
+    sum_reward = 0
     for i in range(num_sims):
-        sum_reward = 0
         temp_reward = pairwiseSolver.online_planner(8) #initally 19
         sum_reward += temp_reward
 

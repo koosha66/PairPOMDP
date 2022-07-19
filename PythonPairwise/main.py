@@ -3,7 +3,7 @@ Created on Sun Jan 27 18:48:51 2019
 @author: koosha
 """
 
-from Pairwise.pomdp import POMDP
+from PythonPairwise.pomdp import POMDP
 import numpy as np
 from environment import Environment
 

@@ -40,26 +40,18 @@ class PairwiseSolver:
         self.policy = len(self.pomdp.states) #used in MDP
 
         #make states_actions
-        self.states_actions = np.empty((self.nrActions, self.nrStates), int) #argmax of belief_state, s* from paper
-        for state in range(self.nrStates):
-            for action in range(self.nrActions):
-                state_distribution = self.transition[action][state]
-                self.states_actions[action][state] = np.argmax(state_distribution)
+        self.states_actions = np.argmax(self.transition, axis=2)
 
         #make states_observations
-        self.states_observations = np.zeros((self.nrActions, self.nrStates), int)
-        for state in range(self.nrStates):
-            for action in range(self.nrActions):
-                observation_distribution = self.observation[action][state]
-                self.states_observations[action][state] = np.argmax(observation_distribution)
+        self.states_observations = np.argmax(self.observation, axis=2)
 
         #make neighbors
+        ## TODO: is matrix implementation possible?
         self.neighbors = np.empty((len(self.pomdp.actions), len(self.pomdp.states)), int) #vector in C++ file
         self.neighbors = self.neighbors.tolist()
         for state in range(self.nrStates):
             for action in range(self.nrActions):
                 first_found = False
-
                 for end_state in range(self.nrStates):
                     if self.transition[action][state][end_state] > 0:
                         if not first_found:
@@ -68,7 +60,9 @@ class PairwiseSolver:
                         else:
                             self.neighbors[action][state].append(end_state)
 
+
         # generate 3d and 2d Reward
+        ## TODO: switch to using R_2d (no matrix implementation possible
         self.R_2d = np.zeros([self.nrActions, self.nrStates])
         self.R_3d = np.zeros([self.nrActions, self.nrStates, self.nrStates])
         for action in range(self.nrActions):
@@ -82,7 +76,7 @@ class PairwiseSolver:
                                                           self.pomdp.R[action, start_state, end_state, obs]
                         self.R_3d[action, start_state, end_state] += obs_prob * \
                                                                      self.pomdp.R[action, start_state, end_state, obs]
-        self.reward = self.R_3d
+        self.reward = self.R_3d #try to use 2d_reward instead
 
 
 
@@ -115,8 +109,6 @@ class PairwiseSolver:
             self.V = new_V
             self.policy = new_policy
 
-        print(self.policy)
-
 
 
     def SLAP_pairs(self, difference_threshold):
@@ -124,6 +116,7 @@ class PairwiseSolver:
         implement algorithm 1 (simultaneous localization and planning)
         :param difference_threshold:
         '''
+        ## TODO: write as matrix implementation
         one_action_localization = np.zeros((self.nrStates, self.nrStates), float) - 10  # init to MIN value
         indistinguishable_states = []  # fill with tuples of indistinguishable states
         start_time = time.time()
@@ -182,7 +175,7 @@ class PairwiseSolver:
                 s, s_prime = indistinguishable_states[pair]
                 max_value = one_action_localization[s][s_prime]
                 for ac in range(self.nrActions):
-                    # (R((s,s'),a) + discount(sum(V(s'',s''')p((s'',s''')|(s,s'),a)
+                    # (R((s,s'),a) + discount(sum(V(s'',s_tp)p((s'',s_tp)|(s,s'),a)
                     temp_value = (.5 * (self.reward[ac][s][self.states_actions[ac][s]] +
                                         self.reward[ac][s_prime][self.states_actions[ac][s_prime]]) + self.gamma *
                                         self.pair_values[self.states_actions[ac][s]][self.states_actions[ac][s_prime]])
@@ -204,173 +197,10 @@ class PairwiseSolver:
         np.savetxt("pair_actions.txt", self.pair_actions)
 
 
-    def online_planner(self, compare_ratio):
-        '''
-        implement Algorithm 2, solver, online planning method
-        :param compare_ratio:
-        '''
-        ## TODO: review, clean, fix (reward is still 0)
-        ## TODO: format as matrices
-        iterations = 151 #NUM_ITERATIONS in C++
-        max_utility = -10 #MIN in C++
-        valid_action = [False] * self.nrActions
-        actions = [-1] * iterations
-
-        self.belief = np.multiply(self.start, 1)
-        real_state = self.choose_start_state()
-        visited_states = [real_state]
-
-        start_time = time.time()
-
-        for iteration in range(iterations):
-            list_states = []
-            real_states = []
-
-            # pseudocode line 1 - maxBel = max_s b_k(s)
-            real_states.append(real_state)
-            max_bel = np.argmax(self.belief, axis=0)
-
-            # pseudocode line 2 - S' = {s|b(s) > maxBel/comp_ratio
-            for state in range(self.nrStates):
-                if self.belief[state] > self.belief[max_bel] / compare_ratio:
-                    list_states.append(state)  # list_states = set S'
-
-            # pseudocode line 4/5 - if |S'| == 1 then a is optimal action
-            if len(list_states) == 1:
-                action = self.policy[list_states[0]]
-
-            # if multiple likely states (loop beginning pseudocode line 6)
-            else:
-                # pseudocode line 3 - A' = {a|a = u(s,s'), s, s' in S'}
-                for i in range(len(list_states)):
-                    for j in range(i):
-                        s = list_states[i]
-                        s_prime = list_states[j]
-                        if self.pair_actions[s][s_prime] >= 0:
-                            valid_action[self.pair_actions[s][s_prime]] = True
-
-                # pseudocode line 7 - for each a in A' do
-                for ac in range(self.nrActions):
-                    if valid_action[ac]:
-                        utility = 0
-
-                        # pseudocode line 8 - for each s in S' do s* = argmax_s' p(s'|s, a)
-                        for i in range(len(list_states)):
-                            for j in range(i):
-                                s1 = list_states[i]
-                                s2 = list_states[j]
-                                # pseudocode line 8.1 - H(a) = sum[(0.5 * (R(s,a) + R(s',a)) + gamma V(s*,s'*))b(s)b(s')]
-                                utility += self.belief[s1] * self.belief[s2] * \
-                                           (.5 * self.reward[ac][s1][self.states_actions[ac][s1]] + .5 *
-                                            self.reward[ac][s2][self.states_actions[ac][s2]] + self.gamma *
-                                            self.pair_values[self.states_actions[ac][s1]][self.states_actions[ac][s2]])
-
-                        # pseudocode line 9 - a = argmax_a H(a)
-                        if utility > max_utility:
-                            max_utility = utility
-                            action = ac
-
-            #act, observe, and update belief
-            obs, real_state = self.act_and_observe(real_state, action)
-            actions[iteration] = action
-            visited_states.append(real_state)
-            self.belief = self.update_bel(action, obs)
-
-        #after iterations complete. get reward and time
-        total_reward = 0
-        discount = 1
-        for iteration in range(iterations - 1):
-            discount = discount * self.gamma
-            s = visited_states[iteration]
-            s_prime = visited_states[iteration+1]
-            total_reward += discount * self.reward[actions[iteration]][s][s_prime]
-        end_time = time.time()
-
-        return total_reward
-
-
-    def act_and_observe(self, real_state, action):
-        '''
-        make the action, observe new state
-        :param real_state:
-        :param action:
-        '''
-        '''
-        rand_max = 32762
-        r = random.randrange(0, rand_max) % 32000
-        r = r / 32000
-        sum = 0
-        for i in range(self.nrStates-1):
-            sum = sum + self.transition[action][i][real_state]
-            if sum > r:
-                break
-        real_state = i
-        sum = 0
-        r = random.randrange(0, rand_max) % 32000
-        r = r / 32000
-        for i in range(self.nrObservations):
-            sum = sum + self.observation[action][real_state][i]
-            if sum > r:
-                return i, real_state
-        return i, real_state
-        '''
-
-        # from QMDP.environment
-        # NOTE: making this change removed /0 error but decreased reward
-
-        # determine start state
-        start_state = real_state
-
-        # determine end state and update current
-        transition_prob = self.pomdp.T[action, start_state]
-        end_state = np.random.choice(np.arange(0, len(transition_prob)), p=transition_prob)
-
-        # find observation distribution
-        observation_distribution = self.pomdp.O[action, end_state]
-        observation = np.random.choice(np.arange(0, len(observation_distribution)), p=observation_distribution)
-
-        return observation, end_state
-
-
-
-    def update_bel(self, action, o):
-        '''
-        from QMDP.py implementation, confirmed works
-        :return: new belief state
-        '''
-        #compute transitions
-        current_belief = np.matmul(self.belief, self.pomdp.T[action])
-
-        #multiply by observation probability
-        current_belief = current_belief * self.pomdp.O[action, :, o]
-
-        return current_belief / np.sum(current_belief) #if self.pomdp.O[] was 0, now we have nan, BAD
-
-
-    def choose_start_state(self):
-        #confirmed OK from previous QMDP code
-        probability_distribution = self.start
-        start_state = np.random.choice(np.arange(0, self.nrStates), p=probability_distribution)
-        return start_state
-
-
 
 
 if __name__ == "__main__":
     pomdp = POMDP("Hallway2.POMDP")
     pairwiseSolver = PairwiseSolver(pomdp)
-    pairwiseSolver.SLAP_pairs(0.70) #initially 0.8
-
-    num_sims = 100 #for testing
-    #for j in range(10): #what is this 10
-    #    sum_reward = 0
-    #    #below was nested
-    for i in range(num_sims):
-        sum_reward = 0
-        temp_reward = pairwiseSolver.online_planner(8) #initally 19
-        sum_reward += temp_reward
-
-    print("Average total reward after", num_sims, "simulations", sum_reward/num_sims)
-
-
+    pairwiseSolver.SLAP_pairs(0.70)  # initially 0.8
 
